@@ -3,11 +3,13 @@ import { SettingsIcon } from "outline-icons";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { languageOptions } from "@shared/i18n";
+import { UserPreference } from "@shared/types";
 import Button from "~/components/Button";
 import Heading from "~/components/Heading";
 import InputSelect from "~/components/InputSelect";
 import Scene from "~/components/Scene";
 import Switch from "~/components/Switch";
+import Text from "~/components/Text";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import useStores from "~/hooks/useStores";
 import useToasts from "~/hooks/useToasts";
@@ -54,7 +56,11 @@ function Preferences() {
       icon={<SettingsIcon color="currentColor" />}
     >
       <Heading>{t("Preferences")}</Heading>
+      <Text type="secondary">
+        <Trans>Manage settings that affect your personal experience.</Trans>
+      </Text>
 
+      <Heading as="h2">{t("Display")}</Heading>
       <SettingRow
         label={t("Language")}
         name="language"
@@ -83,6 +89,35 @@ function Preferences() {
           ariaLabel={t("Language")}
         />
       </SettingRow>
+      <SettingRow
+        name="useCursorPointer"
+        label={t("Use pointer cursor")}
+        description={t(
+          "Show a hand cursor when hovering over interactive elements."
+        )}
+      >
+        <Switch
+          id="useCursorPointer"
+          name="useCursorPointer"
+          checked={user.getPreference(UserPreference.UseCursorPointer, true)}
+          onChange={handlePreferenceChange}
+        />
+      </SettingRow>
+      <SettingRow
+        name="codeBlockLineNumbers"
+        label={t("Show line numbers")}
+        description={t("Show line numbers on code blocks in documents.")}
+        border={false}
+      >
+        <Switch
+          id="codeBlockLineNumbers"
+          name="codeBlockLineNumbers"
+          checked={user.getPreference(UserPreference.CodeBlockLineNumers, true)}
+          onChange={handlePreferenceChange}
+        />
+      </SettingRow>
+
+      <Heading as="h2">{t("Behavior")}</Heading>
       <SettingRow
         border={false}
         name="rememberLastPath"

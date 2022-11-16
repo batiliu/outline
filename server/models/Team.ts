@@ -18,11 +18,14 @@ import {
   IsUUID,
   IsUrl,
   AllowNull,
+  AfterUpdate,
 } from "sequelize-typescript";
-import { CollectionPermission } from "@shared/types";
+import { CollectionPermission, TeamPreference } from "@shared/types";
 import { getBaseDomain, RESERVED_SUBDOMAINS } from "@shared/utils/domains";
 import env from "@server/env";
-import { generateAvatarUrl } from "@server/utils/avatars";
+import DeleteAttachmentTask from "@server/queues/tasks/DeleteAttachmentTask";
+import parseAttachmentIds from "@server/utils/parseAttachmentIds";
+import Attachment from "./Attachment";
 import AuthenticationProvider from "./AuthenticationProvider";
 import Collection from "./Collection";
 import Document from "./Document";
@@ -55,16 +58,16 @@ export type TeamPreferences = Record<string, unknown>;
 @Fix
 class Team extends ParanoidModel {
   @NotContainsUrl
-  @Length({ max: 255, msg: "name must be 255 characters or less" })
+  @Length({ min: 2, max: 255, msg: "name must be between 2 to 255 characters" })
   @Column
   name: string;
 
   @IsLowercase
   @Unique
   @Length({
-    min: 4,
+    min: 2,
     max: 32,
-    msg: "subdomain must be between 4 and 32 characters",
+    msg: "subdomain must be between 2 and 32 characters",
   })
   @Is({
     args: [/^[a-z\d-]+$/, "i"],
@@ -90,8 +93,20 @@ class Team extends ParanoidModel {
   @AllowNull
   @IsUrl
   @Length({ max: 4096, msg: "avatarUrl must be 4096 characters or less" })
-  @Column
-  avatarUrl: string | null;
+  @Column(DataType.STRING)
+  get avatarUrl() {
+    const original = this.getDataValue("avatarUrl");
+
+    if (original && !original.startsWith("https://tiley.herokuapp.com")) {
+      return original;
+    }
+
+    return null;
+  }
+
+  set avatarUrl(value: string | null) {
+    this.setDataValue("avatarUrl", value);
+  }
 
   @Default(true)
   @Column
@@ -159,15 +174,33 @@ class Team extends ParanoidModel {
     return url.href.replace(/\/$/, "");
   }
 
-  get logoUrl() {
-    return (
-      this.avatarUrl ||
-      generateAvatarUrl({
-        id: this.id,
-        name: this.name,
-      })
-    );
-  }
+  /**
+   * Preferences that decide behavior for the team.
+   *
+   * @param preference The team preference to set
+   * @param value Sets the preference value
+   * @returns The current team preferences
+   */
+  public setPreference = (preference: TeamPreference, value: boolean) => {
+    if (!this.preferences) {
+      this.preferences = {};
+    }
+    this.preferences[preference] = value;
+    this.changed("preferences", true);
+
+    return this.preferences;
+  };
+
+  /**
+   * Returns the passed preference value
+   *
+   * @param preference The user preference to retrieve
+   * @param fallback An optional fallback value, defaults to false.
+   * @returns The preference value if set, else undefined
+   */
+  public getPreference = (preference: TeamPreference, fallback = false) => {
+    return this.preferences?.[preference] ?? fallback;
+  };
 
   provisionFirstCollection = async (userId: string) => {
     await this.sequelize!.transaction(async (transaction) => {
@@ -220,7 +253,7 @@ class Team extends ParanoidModel {
     });
   };
 
-  collectionIds = async function (paranoid = true) {
+  public collectionIds = async function (this: Team, paranoid = true) {
     const models = await Collection.findAll({
       attributes: ["id"],
       where: {
@@ -234,7 +267,17 @@ class Team extends ParanoidModel {
     return models.map((c) => c.id);
   };
 
-  isDomainAllowed = async function (domain: string) {
+  /**
+   * Find whether the passed domain can be used to sign-in to this team. Note
+   * that this method always returns true if no domain restrictions are set.
+   *
+   * @param domain The domain to check
+   * @returns True if the domain is allowed to sign-in to this team
+   */
+  public isDomainAllowed = async function (
+    this: Team,
+    domain: string
+  ): Promise<boolean> {
     const allowedDomains = (await this.$get("allowedDomains")) || [];
 
     return (
@@ -259,6 +302,37 @@ class Team extends ParanoidModel {
 
   @HasMany(() => TeamDomain)
   allowedDomains: TeamDomain[];
+
+  // hooks
+
+  @AfterUpdate
+  static deletePreviousAvatar = async (model: Team) => {
+    if (
+      model.previous("avatarUrl") &&
+      model.previous("avatarUrl") !== model.avatarUrl
+    ) {
+      const attachmentIds = parseAttachmentIds(
+        model.previous("avatarUrl"),
+        true
+      );
+      if (!attachmentIds.length) {
+        return;
+      }
+
+      const attachment = await Attachment.findOne({
+        where: {
+          id: attachmentIds[0],
+          teamId: model.id,
+        },
+      });
+
+      if (attachment) {
+        await DeleteAttachmentTask.schedule({
+          attachmentId: attachment.id,
+        });
+      }
+    }
+  };
 }
 
 export default Team;
